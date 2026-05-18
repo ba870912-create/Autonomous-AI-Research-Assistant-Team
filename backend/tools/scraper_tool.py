@@ -1,7 +1,9 @@
 from playwright.sync_api import sync_playwright
 from markdownify import markdownify
-from crewai.tools import BaseTool  
+from crewai.tools import BaseTool
 from pydantic import BaseModel, Field
+from backend.db.chroma_client import store_source
+import re
 
 class ScraperInput(BaseModel):
     url: str = Field(description="URL to scrape")
@@ -12,25 +14,18 @@ class WebScraperTool(BaseTool):
     args_schema: type[BaseModel] = ScraperInput
 
     def _run(self, url: str) -> str:
-        # ✅ Basic URL validation
         if not url.startswith(("http://", "https://")):
-            return "Error: Invalid URL — must start with http:// or https://"
+            return "Error: Invalid URL"
 
         try:
             with sync_playwright() as p:
                 browser = p.chromium.launch(headless=True)
                 try:
                     page = browser.new_page()
-
-                    # ✅ Block images/fonts to speed up scraping
                     page.route("**/*.{png,jpg,jpeg,gif,svg,woff,woff2,ttf}",
                                lambda route: route.abort())
-
                     page.goto(url, timeout=30000, wait_until="domcontentloaded")
-
-                    # ✅ Wait for body to be ready
                     page.wait_for_selector("body", timeout=5000)
-
                     html = page.content()
                 finally:
                     browser.close()
@@ -39,10 +34,10 @@ class WebScraperTool(BaseTool):
             return f"Error scraping {url}: {str(e)}"
 
         markdown = markdownify(html, heading_style="ATX")
-
-        # ✅ Clean up excessive whitespace
-        import re
         markdown = re.sub(r'\n{3,}', '\n\n', markdown).strip()
+        markdown = markdown[:8000]  
 
-        # ✅ Trim to token limit
-        return markdown[:1000] if len(markdown) > 4000 else markdown
+        # Store in ChromaDB after scraping
+        store_source(url=url, content=markdown, metadata={"source": "web"})
+
+        return markdown

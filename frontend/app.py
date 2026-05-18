@@ -25,13 +25,12 @@ query = st.text_area(
 
 if st.button("🚀 Start Research", type="primary") and query:
 
-    # ✅ Step 1: POST with long timeout (just to submit the job)
     with st.spinner("Submitting research job..."):
         try:
             response = httpx.post(
                 f"{api_base}/research",
                 json={"query": query, "citation_style": citation_style},
-                timeout=30  # زيادة للـ submission بس
+                timeout=30
             )
             job_id = response.json()["job_id"]
             st.success(f"Job started! ID: {job_id}")
@@ -39,11 +38,11 @@ if st.button("🚀 Start Research", type="primary") and query:
             st.error(f"Failed to start job: {e}")
             st.stop()
 
-    # ✅ Step 2: Poll for results (كل 5 ثواني)
     progress_bar = st.progress(0)
-    status_text  = st.empty()
+    status_text = st.empty()
     i = 0
-    max_wait = 120  # ينتظر max 10 دقايق (120 * 5 ثواني)
+    max_wait = 120
+    final_result = None
 
     while i < max_wait:
         time.sleep(5)
@@ -65,14 +64,37 @@ if st.button("🚀 Start Research", type="primary") and query:
         if data["status"] == "done":
             progress_bar.progress(100)
             status_text.text("✅ Research complete!")
-            st.markdown(data["result"])
+            final_result = data["result"]
+            st.markdown(final_result)
+
+            #  Markdown download
             if export_md:
                 st.download_button(
                     "📥 Download Markdown",
-                    data["result"],
+                    data=final_result,
                     file_name="research_report.md",
                     mime="text/markdown"
                 )
+
+            # PDF download
+            try:
+                pdf_response = httpx.post(
+                    f"{api_base}/export-pdf",
+                    json={"job_id": job_id, "markdown": final_result},
+                    timeout=30
+                )
+                if pdf_response.status_code == 200:
+                    st.download_button(
+                        label="📄 Download PDF",
+                        data=pdf_response.content,
+                        file_name="research_report.pdf",
+                        mime="application/pdf"
+                    )
+                else:
+                    st.warning("PDF generation failed")
+            except Exception as e:
+                st.warning(f"PDF export error: {e}")
+
             break
 
         elif data["status"] == "error":
@@ -82,3 +104,19 @@ if st.button("🚀 Start Research", type="primary") and query:
         i += 1
     else:
         st.warning("⏱️ Timed out after 10 minutes. The job may still be running.")
+
+#  Research History
+st.divider()
+st.subheader("📚 Research History")
+if st.button("🔄 Load History"):
+    try:
+        hist_response = httpx.get(f"{api_base}/history", timeout=10)
+        history = hist_response.json().get("history", [])
+        if history:
+            for item in history:
+                status_icon = "✅" if item["status"] == "done" else "❌"
+                st.write(f"{status_icon} **{item['query']}** — {item['citation_style']} — {item['created_at'][:19]}")
+        else:
+            st.info("No research history yet.")
+    except Exception as e:
+        st.error(f"Failed to load history: {e}")
